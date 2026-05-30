@@ -1,6 +1,6 @@
 import os
-import requests
 import random
+import requests
 from flask import Flask, request
 from dotenv import load_dotenv
 
@@ -13,7 +13,8 @@ ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 app = Flask(__name__)
 
-BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+TELEGRAM_SEND_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
 
 signatures = [
     "— @idrokium",
@@ -26,15 +27,10 @@ signatures = [
 
 
 # -------------------------
-# GEMINI AUTO-FALLBACK ENGINE
+# GEMINI (WORKING FOR FREE KEYS)
 # -------------------------
 def gemini_generate(prompt):
-    # Multiple model candidates (safe fallback chain)
-    endpoints = [
-        "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent",
-        "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent",
-        "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent",
-    ]
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
 
     payload = {
         "contents": [
@@ -42,67 +38,54 @@ def gemini_generate(prompt):
         ]
     }
 
-    last_error = None
-
-    for url in endpoints:
-        try:
-            full_url = f"{url}?key={GEMINI_API_KEY}"
-            r = requests.post(full_url, json=payload, timeout=20)
-            data = r.json()
-
-            print("TRY:", url)
-            print("RESPONSE:", data)
-
-            if "error" in data:
-                last_error = data["error"].get("message", "unknown error")
-                continue
-
-            return data["candidates"][0]["content"]["parts"][0]["text"], None
-
-        except Exception as e:
-            last_error = str(e)
-            continue
-
-    return None, last_error or "Unknown Gemini failure"
-
-
-# -------------------------
-# TELEGRAM SENDER
-# -------------------------
-def send_to_channel(text):
     try:
-        requests.post(BASE_URL, json={
-            "chat_id": CHANNEL_ID,
-            "text": text
-        }, timeout=10)
+        r = requests.post(url, json=payload, timeout=20)
+        data = r.json()
+
+        print("GEMINI RESPONSE:", data)
+
+        if "error" in data:
+            return None, data["error"].get("message", "Unknown error")
+
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        return text, None
+
     except Exception as e:
-        print("Telegram error:", e)
+        return None, str(e)
 
 
 # -------------------------
-# PROMPT ENGINE
+# CONTENT PROMPT
 # -------------------------
 def build_prompt():
     prompts = [
         "Write a deep philosophical thought that feels human and slightly emotional.",
         "Ask a psychological question that makes people comment deeply.",
-        "Write a short mysterious micro-story with meaning.",
-        "Write an abstract inner monologue of a human mind.",
+        "Write a short mysterious micro-story.",
+        "Write an abstract human inner monologue.",
         "Create a life insight that feels raw and real."
     ]
     return random.choice(prompts)
 
 
 # -------------------------
-# MAIN POST LOGIC
+# TELEGRAM SENDER
 # -------------------------
-def generate_and_send():
-    prompt = build_prompt()
+def send_to_channel(text):
+    requests.post(TELEGRAM_SEND_URL, json={
+        "chat_id": CHANNEL_ID,
+        "text": text
+    })
 
-    content, error = gemini_generate(prompt)
+
+# -------------------------
+# POST GENERATION
+# -------------------------
+def generate_post():
+    content, error = gemini_generate(build_prompt())
 
     if error:
-        message = f"⚠️ GEMINI API ERROR\n\n{error}"
+        message = f"⚠️ GEMINI API ERROR:\n{error}"
     else:
         message = f"{content}\n\n{random.choice(signatures)}"
 
@@ -110,14 +93,14 @@ def generate_and_send():
 
 
 # -------------------------
-# ADMIN COMMAND HANDLER
+# ADMIN COMMAND
 # -------------------------
 def handle_command(text, user_id):
     if user_id != ADMIN_ID:
         return
 
     if text == "/send":
-        generate_and_send()
+        generate_post()
 
 
 # -------------------------
