@@ -2,8 +2,7 @@ import os
 import time
 import random
 import requests
-import threading
-from flask import Flask, request
+import secrets
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,9 +12,9 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-app = Flask(__name__)
+last_message = ""
 
 signatures = [
     "— @idrokium",
@@ -41,66 +40,77 @@ categories = [
 ]
 
 
-def gemini_generate(prompt: str) -> str:
-    if not GEMINI_API_KEY:
-        return "Fikrlar jim emas, faqat bugun ular yozilmay qoldi."
+def send_message(text, chat_id):
+    try:
+        requests.post(f"{BASE_URL}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": text
+        }, timeout=10)
+    except Exception as e:
+        print("Telegram error:", e)
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+
+def gemini_generate(prompt):
+    if not GEMINI_API_KEY:
+        return "API KEY YO‘Q"
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
 
     payload = {
         "contents": [
             {"parts": [{"text": prompt}]}
-        ]
+        ],
+        "generationConfig": {
+            "temperature": 1.3,
+            "topP": 0.95
+        }
     }
 
     try:
         r = requests.post(url, json=payload, timeout=20)
         data = r.json()
         return data["candidates"][0]["content"]["parts"][0]["text"]
-    except:
-        return "Bugun fikrlar biroz chalkash... lekin bu ham insoniy."
+    except Exception as e:
+        print("Gemini error:", e)
+        return "Bugun fikrlar ishlamay qoldi..."
 
 
 def build_prompt(category):
     return {
         "wisdom": "Write a deep philosophical quote with human tone.",
-        "question": "Ask a psychological question that triggers comments.",
-        "story": "Write a short strange micro-story with emotional depth.",
+        "question": "Ask a psychological question that makes people comment.",
+        "story": "Write a short strange emotional micro-story.",
         "creative": "Write abstract human inner monologue style text.",
-        "news": "Write neutral news-style text + ask opinion.",
+        "news": "Write neutral news + ask opinion.",
         "fact": "Give an interesting science or psychology fact.",
         "brain_teaser": "Give a logic puzzle (no answer).",
         "this_or_that": "Create a 'This or That' choice question.",
         "challenge": "Give a 1-day self improvement challenge.",
         "life_hack": "Give a practical life hack.",
         "myth_fact": "State a myth and correct it briefly."
-    }.get(category, "Write something meaningful.")
-
-
-def send_to_telegram(text):
-    try:
-        requests.post(TELEGRAM_URL, json={
-            "chat_id": CHANNEL_ID,
-            "text": text
-        }, timeout=10)
-    except Exception as e:
-        print("Telegram send error:", e)
+    }[category]
 
 
 def generate_post():
-    category = random.choice(categories)
+    global last_message
+
+    category = secrets.choice(categories)
     prompt = build_prompt(category)
 
     content = gemini_generate(prompt)
     signature = random.choice(signatures)
 
     final_text = f"{content}\n\n{signature}"
-    send_to_telegram(final_text)
+
+    # prevent exact repetition
+    if final_text == last_message:
+        return
+
+    last_message = final_text
+
+    send_message(final_text, CHANNEL_ID)
 
 
-# -------------------------
-# ADMIN COMMAND HANDLER
-# -------------------------
 def handle_command(text, user_id):
     if user_id != ADMIN_ID:
         return
@@ -109,45 +119,48 @@ def handle_command(text, user_id):
         generate_post()
 
 
-# -------------------------
-# TELEGRAM WEBHOOK ROUTE
-# -------------------------
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def telegram_webhook():
-    data = request.get_json()
+def poll_updates():
+    offset = 0
 
-    if "message" in data:
-        msg = data["message"]
-        text = msg.get("text", "")
-        user_id = msg["from"]["id"]
+    while True:
+        try:
+            r = requests.get(f"{BASE_URL}/getUpdates", params={
+                "offset": offset,
+                "timeout": 30
+            }, timeout=35)
 
-        handle_command(text, user_id)
+            data = r.json()
 
-    return "ok"
+            for update in data.get("result", []):
+                offset = update["update_id"] + 1
+
+                msg = update.get("message")
+                if not msg:
+                    continue
+
+                text = msg.get("text", "")
+                user_id = msg["from"]["id"]
+
+                handle_command(text, user_id)
+
+        except Exception as e:
+            print("Poll error:", e)
+
+        time.sleep(1)
 
 
-# -------------------------
-# KEEP ALIVE + HOURLY LOOP
-# -------------------------
-def loop():
+def hourly_post_loop():
     while True:
         try:
             generate_post()
         except Exception as e:
-            print("Loop error:", e)
+            print("Post loop error:", e)
 
         time.sleep(3600)
 
 
-@app.route("/")
-def home():
-    return "idrokium bot is running."
-
-
-# -------------------------
-# START APP
-# -------------------------
 if __name__ == "__main__":
-    threading.Thread(target=loop).start()
+    import threading
 
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    threading.Thread(target=poll_updates).start()
+    hourly_post_loop()
