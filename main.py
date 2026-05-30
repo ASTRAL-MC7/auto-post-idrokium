@@ -13,8 +13,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 app = Flask(__name__)
 
-TELEGRAM_SEND_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
+TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
 signatures = [
     "— @idrokium",
@@ -27,10 +26,10 @@ signatures = [
 
 
 # -------------------------
-# GEMINI (WORKING FOR FREE KEYS)
+# GEMINI (FIXED FOR YOUR MODEL LIST)
 # -------------------------
 def gemini_generate(prompt):
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
 
     payload = {
         "contents": [
@@ -45,7 +44,7 @@ def gemini_generate(prompt):
         print("GEMINI RESPONSE:", data)
 
         if "error" in data:
-            return None, data["error"].get("message", "Unknown error")
+            return None, data["error"].get("message", "Unknown Gemini error")
 
         text = data["candidates"][0]["content"]["parts"][0]["text"]
         return text, None
@@ -55,7 +54,7 @@ def gemini_generate(prompt):
 
 
 # -------------------------
-# CONTENT PROMPT
+# CONTENT PROMPT ENGINE
 # -------------------------
 def build_prompt():
     prompts = [
@@ -63,23 +62,27 @@ def build_prompt():
         "Ask a psychological question that makes people comment deeply.",
         "Write a short mysterious micro-story.",
         "Write an abstract human inner monologue.",
-        "Create a life insight that feels raw and real."
+        "Create a life insight that feels raw and real.",
+        "Write something slightly dark but meaningful about human behavior."
     ]
     return random.choice(prompts)
 
 
 # -------------------------
-# TELEGRAM SENDER
+# TELEGRAM SEND
 # -------------------------
 def send_to_channel(text):
-    requests.post(TELEGRAM_SEND_URL, json={
-        "chat_id": CHANNEL_ID,
-        "text": text
-    })
+    try:
+        requests.post(TELEGRAM_URL, json={
+            "chat_id": CHANNEL_ID,
+            "text": text
+        }, timeout=10)
+    except Exception as e:
+        print("Telegram error:", e)
 
 
 # -------------------------
-# POST GENERATION
+# MAIN POST FUNCTION
 # -------------------------
 def generate_post():
     content, error = gemini_generate(build_prompt())
@@ -93,7 +96,7 @@ def generate_post():
 
 
 # -------------------------
-# ADMIN COMMAND
+# ADMIN COMMAND (/send)
 # -------------------------
 def handle_command(text, user_id):
     if user_id != ADMIN_ID:
@@ -131,7 +134,7 @@ def home():
 
 
 # -------------------------
-# START SERVER
+# START
 # -------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
