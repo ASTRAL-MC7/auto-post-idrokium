@@ -11,9 +11,9 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
 app = Flask(__name__)
+
+BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
 signatures = [
     "— @idrokium",
@@ -26,10 +26,15 @@ signatures = [
 
 
 # -------------------------
-# GEMINI TEST FUNCTION
+# GEMINI AUTO-FALLBACK ENGINE
 # -------------------------
 def gemini_generate(prompt):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    # Multiple model candidates (safe fallback chain)
+    endpoints = [
+        "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent",
+        "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent",
+    ]
 
     payload = {
         "contents": [
@@ -37,59 +42,75 @@ def gemini_generate(prompt):
         ]
     }
 
-    try:
-        r = requests.post(url, json=payload, timeout=20)
-        data = r.json()
+    last_error = None
 
-        # DEBUG PRINT (Render logs)
-        print("GEMINI RESPONSE:", data)
+    for url in endpoints:
+        try:
+            full_url = f"{url}?key={GEMINI_API_KEY}"
+            r = requests.post(full_url, json=payload, timeout=20)
+            data = r.json()
 
-        if "error" in data:
-            return None, f"API ERROR: {data['error'].get('message', 'unknown')}"
+            print("TRY:", url)
+            print("RESPONSE:", data)
 
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-        return text, None
+            if "error" in data:
+                last_error = data["error"].get("message", "unknown error")
+                continue
 
-    except Exception as e:
-        return None, str(e)
+            return data["candidates"][0]["content"]["parts"][0]["text"], None
+
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    return None, last_error or "Unknown Gemini failure"
 
 
 # -------------------------
-# SEND TO TELEGRAM
+# TELEGRAM SENDER
 # -------------------------
 def send_to_channel(text):
     try:
         requests.post(BASE_URL, json={
             "chat_id": CHANNEL_ID,
             "text": text
-        })
+        }, timeout=10)
     except Exception as e:
         print("Telegram error:", e)
 
 
 # -------------------------
-# SIMPLE PROMPT
+# PROMPT ENGINE
 # -------------------------
 def build_prompt():
-    return "Write a deep, human-like philosophical thought or question that makes people think."
+    prompts = [
+        "Write a deep philosophical thought that feels human and slightly emotional.",
+        "Ask a psychological question that makes people comment deeply.",
+        "Write a short mysterious micro-story with meaning.",
+        "Write an abstract inner monologue of a human mind.",
+        "Create a life insight that feels raw and real."
+    ]
+    return random.choice(prompts)
 
 
 # -------------------------
 # MAIN POST LOGIC
 # -------------------------
 def generate_and_send():
-    content, error = gemini_generate(build_prompt())
+    prompt = build_prompt()
+
+    content, error = gemini_generate(prompt)
 
     if error:
-        msg = f"⚠️ GEMINI API PROBLEM\n\nReason: {error}"
+        message = f"⚠️ GEMINI API ERROR\n\n{error}"
     else:
-        msg = f"{content}\n\n{random.choice(signatures)}"
+        message = f"{content}\n\n{random.choice(signatures)}"
 
-    send_to_channel(msg)
+    send_to_channel(message)
 
 
 # -------------------------
-# HANDLE COMMANDS
+# ADMIN COMMAND HANDLER
 # -------------------------
 def handle_command(text, user_id):
     if user_id != ADMIN_ID:
@@ -119,7 +140,7 @@ def webhook():
 
 
 # -------------------------
-# HOME ROUTE
+# HEALTH CHECK
 # -------------------------
 @app.route("/")
 def home():
@@ -127,7 +148,7 @@ def home():
 
 
 # -------------------------
-# START
+# START SERVER
 # -------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
